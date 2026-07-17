@@ -39,7 +39,11 @@ public class NettyEventLoopFactory extends AbstractComponentFactory implements A
          log.useNettyThreadFactory(threadFactory.getClass());
       }
 
-      if (threadFactory instanceof DefaultThreadFactory) {
+      // When virtual IO is enabled, the VirtualIoEventLoopGroup creates its own VTs
+      // with stickyAffinity — skip the VT disable and let NativeTransport handle it.
+      boolean virtualIoEnabled = Boolean.getBoolean("infinispan.server.channel.virtual");
+
+      if (!virtualIoEnabled && threadFactory instanceof DefaultThreadFactory) {
          //not supported at the moment
          ((DefaultThreadFactory) threadFactory).useVirtualThread(false);
       }

@@ -18,9 +18,11 @@ public final class NativeTransport {
    private static final boolean IS_LINUX = System.getProperty("os.name").toLowerCase().startsWith("linux");
    private static final String USE_EPOLL_PROPERTY = "infinispan.server.channel.epoll";
    private static final String USE_IOURING_PROPERTY = "infinispan.server.channel.iouring";
+   private static final String USE_VIRTUAL_IO_PROPERTY = "infinispan.server.channel.virtual";
 
    private static final boolean EPOLL_DISABLED = System.getProperty(USE_EPOLL_PROPERTY, "true").equalsIgnoreCase("false");
    private static final boolean IOURING_DISABLED = System.getProperty(USE_IOURING_PROPERTY, "true").equalsIgnoreCase("false");
+   private static final boolean VIRTUAL_IO_ENABLED = Boolean.getBoolean(USE_VIRTUAL_IO_PROPERTY);
 
    // Has to be after other static variables to ensure they are initialized
    private static final Type TYPE = transportType();
@@ -78,6 +80,11 @@ public final class NativeTransport {
    }
 
    public static Class<? extends ServerSocketChannel> serverSocketChannelClass() {
+      if (VIRTUAL_IO_ENABLED) {
+         // VirtualIoEventLoopGroup requires NIO transport
+         SERVER.usingTransport("NIO (virtual threads + stickyAffinity)");
+         return NioServerSocketChannel.class;
+      }
       switch (TYPE) {
          case EPOLL -> {
             SERVER.usingTransport("Epoll");
@@ -95,6 +102,9 @@ public final class NativeTransport {
    }
 
    public static MultithreadEventLoopGroup createEventLoopGroup(int maxExecutors, ThreadFactory threadFactory) {
+      if (VIRTUAL_IO_ENABLED) {
+         return new VirtualIoEventLoopGroup(maxExecutors, NioIoHandler.newFactory());
+      }
       return switch (TYPE) {
          case EPOLL -> new MultiThreadIoEventLoopGroup(maxExecutors, threadFactory, EpollIoHandler.newFactory());
          case IOURING -> IoURingNativeTransport.createEventLoopGroup(maxExecutors, threadFactory);
