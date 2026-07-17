@@ -122,7 +122,6 @@ public class NettyTransport implements Transport {
          InternalLoggerFactory.setDefaultFactory(Log4J2LoggerFactory.INSTANCE);
 
       // Need to initialize these in constructor since they require configuration
-      masterGroup = buildEventLoop(1, masterThreadFactory, configuration.toString());
       // Need to initialize these in constructor since they require configuration. probably we need to inject the ioGroup in the constructor somehow.
       if (cacheManager == null) { //it is null for single-port endpoint. probably we need to inject the ioGroup in the constructor.
          ioGroup = buildEventLoop(configuration.ioThreads(), ioThreadFactory, configuration.toString());
@@ -131,7 +130,13 @@ public class NettyTransport implements Transport {
       }
 
       ServerBootstrap bootstrap = new ServerBootstrap();
-      bootstrap.group(masterGroup, ioGroup);
+      if (NativeTransport.isVirtualIoEnabled()) {
+         // VTs: single group handles both accept and I/O — no dedicated acceptor thread
+         bootstrap.group(ioGroup);
+      } else {
+         masterGroup = buildEventLoop(1, masterThreadFactory, configuration.toString());
+         bootstrap.group(masterGroup, ioGroup);
+      }
       bootstrap.channel(getServerSocketChannel());
       bootstrap.childHandler(handler);
       bootstrap.childOption(ChannelOption.ALLOCATOR, AdaptiveByteBufAllocator.DEFAULT);
@@ -171,13 +176,13 @@ public class NettyTransport implements Transport {
 
    @GuardedBy("this")
    private void stopInternal() {
-      Future<?> masterTerminationFuture = masterGroup.shutdownGracefully(100, 1000, TimeUnit.MILLISECONDS);
+      if (masterGroup != null) {
+         masterGroup.shutdownGracefully(100, 1000, TimeUnit.MILLISECONDS).awaitUninterruptibly();
+      }
       if (cacheManager == null) {
          Future<?> ioTerminationFuture = ioGroup.shutdownGracefully(100, 1000, TimeUnit.MILLISECONDS);
          ioTerminationFuture.awaitUninterruptibly();
       }
-
-      masterTerminationFuture.awaitUninterruptibly();
 
       if (serverChannels.isEmpty() && acceptedChannels.isEmpty()) {
          log.debug("Channel group completely closed, external resources released");

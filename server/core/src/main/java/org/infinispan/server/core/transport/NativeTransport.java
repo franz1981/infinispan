@@ -27,6 +27,10 @@ public final class NativeTransport {
    // Has to be after other static variables to ensure they are initialized
    private static final Type TYPE = transportType();
 
+   public static boolean isVirtualIoEnabled() {
+      return VIRTUAL_IO_ENABLED;
+   }
+
    enum Type {
       EPOLL,
       IOURING,
