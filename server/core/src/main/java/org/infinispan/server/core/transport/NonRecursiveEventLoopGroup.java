@@ -2,6 +2,7 @@ package org.infinispan.server.core.transport;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.infinispan.factories.annotations.Stop;
 import org.infinispan.factories.scopes.Scope;
@@ -25,6 +26,10 @@ import io.netty.util.concurrent.Future;
 public class NonRecursiveEventLoopGroup extends DelegatingEventLoopGroup {
    private static final Log log = Log.getLog(NonRecursiveEventLoopGroup.class);
    private final MultithreadEventLoopGroup eventLoopGroup;
+   // Task submissions round-robin over their own index, not eventLoopGroup.next(): that chooser also picks the
+   // event loop of every accepted channel, and a submission between two accepts would skip event loops.
+   private final EventExecutor[] executors;
+   private final AtomicInteger nextExecutor = new AtomicInteger();
 
    public NonRecursiveEventLoopGroup(MultithreadEventLoopGroup eventLoopGroup) {
       int executors = eventLoopGroup.executorCount();
@@ -32,6 +37,11 @@ public class NonRecursiveEventLoopGroup extends DelegatingEventLoopGroup {
          throw new IllegalArgumentException("Provided multi threaded event loop group must have at least 2 executors, only has " + executors);
       }
       this.eventLoopGroup = eventLoopGroup;
+      this.executors = new EventExecutor[executors];
+      int i = 0;
+      for (EventExecutor executor : eventLoopGroup) {
+         this.executors[i++] = executor;
+      }
    }
 
    @Override
@@ -62,7 +72,7 @@ public class NonRecursiveEventLoopGroup extends DelegatingEventLoopGroup {
 
    private EventExecutor getExecutorNotInEventLoop() {
       while (true) {
-         EventExecutor eventExecutor = eventLoopGroup.next();
+         EventExecutor eventExecutor = executors[Math.floorMod(nextExecutor.getAndIncrement(), executors.length)];
          // We don't want to submit a task to our current thread as some callers may block waiting for it to complete.
          if (eventExecutor.inEventLoop()) {
             log.tracef("Skipped submitting task to %s as it is the current event loop - trying another", eventExecutor);
