@@ -31,6 +31,8 @@ public class VirtualIoEventLoopGroup extends MultiThreadIoEventLoopGroup {
    private static final MethodHandle VB_NAME;             // OfVirtual.name(String, long) -> OfVirtual
    private static final MethodHandle VB_FACTORY;          // OfVirtual.factory() -> ThreadFactory
    private static final MethodHandle VB_STICKY_AFFINITY;  // OfVirtual.stickyAffinity() -> OfVirtual (Loom-only)
+   private static final MethodHandle NEW_AFFINITY_GROUP;  // Thread.Affinity.newGroup() -> Affinity.Group (Loom-only)
+   private static final MethodHandle VB_AFFINITY_GROUP;   // OfVirtual.affinity(Affinity.Group) -> OfVirtual (Loom-only)
 
    static {
       try {
@@ -52,6 +54,20 @@ public class VirtualIoEventLoopGroup extends MultiThreadIoEventLoopGroup {
             // stickyAffinity not available — plain VTs will be used
          }
          VB_STICKY_AFFINITY = sticky;
+
+         MethodHandle newGroup = null;
+         MethodHandle affinityGroup = null;
+         try {
+            Class<?> group = Class.forName("java.lang.Thread$Affinity$Group");
+            newGroup = lookup.findStatic(Class.forName("java.lang.Thread$Affinity"), "newGroup",
+                  MethodType.methodType(group));
+            affinityGroup = lookup.findVirtual(ofVirtual, "affinity",
+                  MethodType.methodType(ofVirtual, group));
+         } catch (ClassNotFoundException | NoSuchMethodException e) {
+            // Thread.Affinity not available — event loops are not spread over carriers
+         }
+         NEW_AFFINITY_GROUP = newGroup;
+         VB_AFFINITY_GROUP = affinityGroup;
       } catch (ReflectiveOperationException e) {
          throw new ExceptionInInitializerError(
                "Virtual threads require Java 21+. Current JDK does not support Thread.ofVirtual(): " + e);
@@ -92,8 +108,8 @@ public class VirtualIoEventLoopGroup extends MultiThreadIoEventLoopGroup {
    }
 
    /**
-    * Creates a ThreadFactory for virtual threads with stickyAffinity.
-    * Falls back to plain virtual threads if stickyAffinity is not available.
+    * Creates a ThreadFactory for virtual threads with stickyAffinity and a shared affinity group.
+    * Falls back to plain virtual threads if stickyAffinity or Thread.Affinity is not available.
     */
    private static ThreadFactory createStickyVirtualThreadFactory() {
       try {
@@ -104,6 +120,10 @@ public class VirtualIoEventLoopGroup extends MultiThreadIoEventLoopGroup {
          // .stickyAffinity() — if available
          if (VB_STICKY_AFFINITY != null) {
             builder = VB_STICKY_AFFINITY.invoke(builder);
+         }
+         // .affinity(Thread.Affinity.newGroup()) — one group for all event loops, so they spread one per carrier
+         if (VB_AFFINITY_GROUP != null) {
+            builder = VB_AFFINITY_GROUP.invoke(builder, NEW_AFFINITY_GROUP.invoke());
          }
          // .factory()
          return (ThreadFactory) VB_FACTORY.invoke(builder);
